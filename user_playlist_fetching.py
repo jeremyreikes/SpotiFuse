@@ -9,6 +9,7 @@ db = client.spotify_db
 all_tracks = db.all_tracks
 parsed_playlists = db.parsed_playlists
 all_artists = db.all_artists
+parsed_playlists.find_one()
 
 import spacy
 from database_querying import *
@@ -17,11 +18,11 @@ client_credentials_manager = SpotifyClientCredentials(client_id=spotify_client_i
 sp = spotipy.Spotify(client_credentials_manager=client_credentials_manager)
 from datetime import datetime
 from time import sleep
-empty_audio_features = dict(duration_ms = None, key=None, mode=None, time_signature=None, acousticness=None, danceability=None,
-                            energy=None, instrumentalness=None, liveness=None, loudness=None, speechiness=None, valence=None, tempo=None)
+from nlp_helpers import lemmatize
 useless_features = ['type', 'uri', 'track_href', 'analysis_url', 'id']
 
 def parse_playlist(playlist_id):
+    playlist_complete = True
     if playlist_id == '' or playlist_id == None:
         return None
     try:
@@ -31,14 +32,17 @@ def parse_playlist(playlist_id):
         return None
     description = results['description']
     name = results['name']
+
     owner = results['owner']['id']
     total_tracks = results['tracks']['total']
-    desc_lang = nlp(description).lang_
-    name_lang = nlp(name).lang_
-    if total_tracks < 10 or total_tracks > 1000 or desc_lang != 'en' or name_lang != 'en':
+
+    desc_doc = nlp(description)
+    desc_lemmas = lemmatize(desc_doc)
+    name_doc = nlp(name)
+    name_lemmas = lemmatize(name_doc)
+    if total_tracks < 10 or total_tracks > 1000 or desc_doc.lang_ != 'en' or name_doc.lang_ != 'en':
         return None
         print(f'too many or little tracks or not english {playlist_id}')
-
     playlist_tracks = dict()
     tracks = results['tracks']
     for track in tracks['items']:
@@ -56,7 +60,7 @@ def parse_playlist(playlist_id):
             except:
                 print('song id not present')
 
-    playlist_tids = list(playlist_tracks.keys())
+    playlist_tids = list()
     tracks_to_add = list()
     artists_to_add = set()
 
@@ -65,21 +69,23 @@ def parse_playlist(playlist_id):
             try:
                 track_data = initialize_track(track, playlist_id)
             except:
-                playlist_tids.remove(tid)
                 continue
             artist_id = track_data['artist_id']
             if not artist_exists(artist_id):
                 artists_to_add.add(artist_id)
             tracks_to_add.append(track_data)
         else:
-            all_tracks.update_one({'_id': tid}, {'$push': {'playlist_ids': playlist_id}})
-
+            playlist_tids.append(tid)
+            all_tracks.update_one({'_id': tid}, {'$push': {'pids': playlist_id}})
     today = str(datetime.now())[:10]
     skip = False
     tracks_to_add = add_audio_features(tracks_to_add, skip)
-    playlist_to_add = dict(_id=playlist_id, description=description, name=name, owner=owner, date_analyzed=today, track_ids=playlist_tids)
+
+    playlist_to_add = dict(_id=playlist_id, name=name, name_lemmas=name_lemmas, owner=owner,
+                           date_analyzed=today, description=description, description_lemmas = desc_lemmas, tids=list())
     artists_to_add = list(artists_to_add)
     artists_to_add = add_genres(artists_to_add, skip)
+
     if skip:
         return # this means there was a local track that screwed things up
     if artists_to_add:
@@ -87,11 +93,15 @@ def parse_playlist(playlist_id):
     if tracks_to_add:
         try:
             all_tracks.insert_many(tracks_to_add)
-        except BulkWriteException:
-            print(tracks_to_add)
+            for track in tracks_to_add:
+                playlist_to_add['tids'].append(track['_id'])
+        except:
+            print('cannot insert tracks')
             return None
-    if playlist_to_add:
-        parsed_playlists.insert_one(playlist_to_add)
+    for tid in playlist_tids:
+        playlist_to_add['tids'].append(tid)
+    parsed_playlists.insert_one(playlist_to_add)
+
 
 def add_audio_features(tracks_to_add, skip, skip_local_songs=True):
     tids = [track['_id'] for track in tracks_to_add]
@@ -114,9 +124,7 @@ def add_audio_features(tracks_to_add, skip, skip_local_songs=True):
                 except:
                     audio_features.append({})
         for index, curr_features in enumerate(audio_features):
-            if not curr_features:
-                tracks_to_add[offset + index - 1]['audio_features'] = empty_audio_features
-            else:
+            if curr_features:
                 for feature in useless_features:
                     del curr_features[feature]
                 tracks_to_add[offset + index - 1]['audio_features'] = curr_features
@@ -126,12 +134,13 @@ def initialize_track(track, playlist_id):
     track_data = dict()
     track_info = track['track']
     track_data['name'] = track_info['name']
+    track_data['name_lemmas'] = lemmatize(nlp(track_data['name']))
     track_data['_id'] = track_info['id']
     track_data['popularity'] = track_info['popularity']
     track_data['explicit'] = track_info['explicit']
     track_data['duration'] = track_info['duration_ms']
     track_data['artist_id'] = track_info['artists'][0]['id']
-    track_data['playlist_ids'] = list([playlist_id])
+    track_data['pids'] = list([playlist_id])
     return track_data
 
 
@@ -159,9 +168,6 @@ def add_genres(artist_ids, skip, skip_local_songs=True):
             artist_data = dict()
             if not curr_artist:
                 artist_data['_id'] = curr_ids[index]
-                artist_data['name'] = None
-                artist_data['genres'] = None
-                artist_data['popularity'] = None
             else:
                 artist_data['_id'] = curr_ids[index]
                 artist_data['name'] = curr_artist['name']

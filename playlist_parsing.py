@@ -1,3 +1,42 @@
+from pymongo import MongoClient
+client = MongoClient()
+db = client.spotify_db
+all_tracks = db.all_tracks
+parsed_playlists = db.parsed_playlists
+all_artists = db.all_artists
+from tqdm import tqdm
+from user_playlist_fetching import parse_playlist
+from database_querying import *
+import csv
+path = '/Users/jeremy/Desktop/final_project/data' # use your path
+import glob
+all_files = glob.glob(path + "/*.csv")
+
+def add_playlist(playlist_id):
+    if playlist_exists(playlist_id):
+        print(f'{playlist_id} already parsed')
+    else:
+        parse_playlist(playlist_id)
+
+
+def build_database(all_files):
+    all_pids = set()
+    for file in all_files:
+        with open(file, 'r') as f:
+          reader = csv.reader(f)
+          lines = list(reader)
+          for line in lines:
+              all_pids.add(line[1])
+    for pid in tqdm(list(all_pids)):
+        add_playlist(pid)
+
+build_database(all_files)
+
+
+
+
+
+
 '''
 all_tracks:
     _id:
@@ -134,38 +173,3 @@ workflow -
 
 
 '''
-
-from pymongo import MongoClient
-client = MongoClient()
-db = client.spotify_db
-all_tracks = db.all_tracks
-parsed_playlists = db.parsed_playlists
-all_artists = db.all_artists
-from tqdm import tqdm
-from user_playlist_fetching import parse_playlist
-from database_querying import *
-import csv
-path = '/Users/jeremy/Desktop/final_project/data' # use your path
-import glob
-all_files = glob.glob(path + "/*.csv")
-
-def add_playlist(playlist_id):
-    if playlist_exists(playlist_id):
-        print(f'{playlist_id} already parsed')
-    else:
-        parse_playlist(playlist_id)
-
-
-def build_database(all_files):
-    all_pids = set()
-    for file in all_files:
-        with open(file, 'r') as f:
-          reader = csv.reader(f)
-          lines = list(reader)
-          for line in lines:
-              all_pids.add(line[1])
-    all_pids.remove('')
-    for pid in tqdm(list(all_pids)):
-        add_playlist(pid)
-
-build_database(all_files)
