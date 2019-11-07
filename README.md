@@ -1,5 +1,7 @@
 # SpotiFuse
 
-After upgrading my Mac OS to Catalina, MongoDB is now failing.
+After upgrading my Mac OS to Catalina, MongoDB is refusing to connect.
 
-I will add a new ReadME and push the corresponding files on 11/10/19.
+I'm currently reworking my code and will push the corresponding fix on 11/10/19.
+
+Stay tuned.
