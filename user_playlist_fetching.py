@@ -1,28 +1,20 @@
-import warnings
-warnings.filterwarnings('ignore')
-from api_keys import spotify_client_id, spotify_client_secret
+from nlp_helpers import lemmatize
+import database_querying as db
 import spotipy
-from spotipy.oauth2 import SpotifyClientCredentials
+import datetime
+client_credentials_manager = SpotifyClientCredentials(client_id=os.environ['spotify_client_id'],
+                                                      client_secret=os.environ['spotify_client_secret'])
+sp = spotipy.Spotify(client_credentials_manager=client_credentials_manager)
+
 from pymongo import MongoClient
 client = MongoClient()
-db = client.spotify_db
-all_tracks = db.all_tracks
-parsed_playlists = db.parsed_playlists
-all_artists = db.all_artists
-parsed_playlists.find_one()
+spotify_db = client.spotify_db
+tracks_db = spotify_db.tracks_db
+playlists_db = spotify_db.playlists_db
+artists_db = spotify_db.artists_db
 
-import spacy
-from database_querying import *
-nlp = spacy.load('en_core_web_sm')
-client_credentials_manager = SpotifyClientCredentials(client_id=spotify_client_id, client_secret=spotify_client_secret)
-sp = spotipy.Spotify(client_credentials_manager=client_credentials_manager)
-from datetime import datetime
-from time import sleep
-from nlp_helpers import lemmatize
-useless_features = ['type', 'uri', 'track_href', 'analysis_url', 'id']
-
+# before parsing, make sure it's not already in DB
 def parse_playlist(playlist_id):
-    playlist_complete = True
     if playlist_id == '' or playlist_id == None:
         return None
     try:
@@ -30,80 +22,63 @@ def parse_playlist(playlist_id):
     except:
         print(f'cant get playlist {playlist_id}')
         return None
+
     description = results['description']
     name = results['name']
-
     owner = results['owner']['id']
     total_tracks = results['tracks']['total']
+    desc_lemmas, desc_lang = lemmatize(description, return_lang=True)
+    name_lemmas, name_lang = lemmatize(name, return_lang=True)
 
-    desc_doc = nlp(description)
-    desc_lemmas = lemmatize(desc_doc)
-    name_doc = nlp(name)
-    name_lemmas = lemmatize(name_doc)
-    if total_tracks < 10 or total_tracks > 1000 or desc_doc.lang_ != 'en' or name_doc.lang_ != 'en':
+    playlist_tracks = parse_tracks(results, sp)
+    playlist_length = len(playlist_tracks)
+    if playlist_length > 1000 or playlist_length < 5 or desc_lang != 'en' or name_lang != 'en':
+        print(f'Too many/few tracks or not english {playlist_id}')
         return None
-        print(f'too many or little tracks or not english {playlist_id}')
-    playlist_tracks = dict()
-    tracks = results['tracks']
-    for track in tracks['items']:
-        try:
-            tid = track['track']['id']
-            playlist_tracks[tid] = track
-        except:
-            print('song ID not present')
-    while tracks['next']:
-        tracks = sp.next(tracks)
-        for track in tracks['items']:
-            try:
-                tid = track['track']['id']
-                playlist_tracks[tid] = track
-            except:
-                print('song id not present')
 
-    playlist_tids = list()
     tracks_to_add = list()
+    existing_tids = set()
     artists_to_add = set()
 
     for tid, track in playlist_tracks.items():
-        if not track_exists(tid):
+        if not db.track_exists(tid):
             try:
                 track_data = initialize_track(track, playlist_id)
+                artist_id = track_data['artist_id']
+                if not db.artist_exists(artist_id):
+                    artists_to_add.add(artist_id)
+                tracks_to_add.append(track_data)
             except:
+                print(f'Error initializing track {tid}')
                 continue
-            artist_id = track_data['artist_id']
-            if not artist_exists(artist_id):
-                artists_to_add.add(artist_id)
-            tracks_to_add.append(track_data)
         else:
-            playlist_tids.append(tid)
-            all_tracks.update_one({'_id': tid}, {'$push': {'pids': playlist_id}})
+            existing_tids.add(tid)
+            tracks_db.update_one({'_id': tid}, {'$push': {'pids': playlist_id}})
     today = str(datetime.now())[:10]
-    skip = False
-    tracks_to_add = add_audio_features(tracks_to_add, skip)
+
+    tracks_to_add = add_audio_features(tracks_to_add)
 
     playlist_to_add = dict(_id=playlist_id, name=name, name_lemmas=name_lemmas, owner=owner,
-                           date_analyzed=today, description=description, description_lemmas = desc_lemmas, tids=list())
+                           date_analyzed=today, description=description, description_lemmas = desc_lemmas, tids=set())
     artists_to_add = list(artists_to_add)
-    artists_to_add = add_genres(artists_to_add, skip)
+    artists_to_add = add_genres(artists_to_add)
 
-    if skip:
-        return # this means there was a local track that screwed things up
     if artists_to_add:
-        all_artists.insert_many(artists_to_add)
+        artists_db.insert_many(artists_to_add)
     if tracks_to_add:
         try:
-            all_tracks.insert_many(tracks_to_add)
+            tracks_db.insert_many(tracks_to_add)
             for track in tracks_to_add:
                 playlist_to_add['tids'].append(track['_id'])
         except:
             print('cannot insert tracks')
             return None
-    for tid in playlist_tids:
+    for tid in existing_tids:
         playlist_to_add['tids'].append(tid)
-    parsed_playlists.insert_one(playlist_to_add)
+    playlists_db.insert_one(playlist_to_add)
 
 
-def add_audio_features(tracks_to_add, skip, skip_local_songs=True):
+def add_audio_features(tracks_to_add):
     tids = [track['_id'] for track in tracks_to_add]
     for i in range((len(tids) // 50) + 1):
         offset = i*50
@@ -113,9 +88,6 @@ def add_audio_features(tracks_to_add, skip, skip_local_songs=True):
         try:
             audio_features = sp.audio_features(curr_ids)
         except:
-            if skip_local_songs:
-                skip=True
-                return None
             audio_features = list()
             for curr_id in curr_ids:
                 try:
@@ -134,9 +106,8 @@ def initialize_track(track, playlist_id):
     track_data = dict()
     track_info = track['track']
     track_data['name'] = track_info['name']
-    track_data['name_lemmas'] = lemmatize(nlp(track_data['name']))
+    track_data['name_lemmas'] = lemmatize(track_data['name'])
     track_data['_id'] = track_info['id']
-    track_data['popularity'] = track_info['popularity']
     track_data['explicit'] = track_info['explicit']
     track_data['duration'] = track_info['duration_ms']
     track_data['artist_id'] = track_info['artists'][0]['id']
@@ -144,7 +115,7 @@ def initialize_track(track, playlist_id):
     return track_data
 
 
-def add_genres(artist_ids, skip, skip_local_songs=True):
+def add_genres(artist_ids):
     artists_data = list()
     for i in range((len(artist_ids) // 50) + 1):
         offset = i*50
@@ -154,9 +125,6 @@ def add_genres(artist_ids, skip, skip_local_songs=True):
         try:
             curr_artists = sp.artists(artist_ids)['artists']
         except:
-            if skip_local_songs:
-                skip = True
-                return None
             curr_artists = list()
             for curr_id in curr_ids:
                 try:
@@ -182,3 +150,26 @@ def get_curr_ids(tids, offset):
     except:
         curr_ids = tids[offset:]
     return curr_ids
+
+
+def parse_tracks(results, sp):
+    '''Ensures track integrity by removing local and no-id tracks.'''
+    clean_tracks = dict()
+    tracks = results['tracks']
+    for track in tracks['items']:
+        clean_tracks = remove_local_tracks(tracks, clean_tracks)
+    while tracks['next']:
+        tracks = sp.next(tracks)
+        clean_tracks = remove_local_tracks(tracks, clean_tracks)
+    return clean_tracks
+
+def remove_local_tracks(tracks, clean_tracks):
+    for track in tracks['items']:
+        try:
+            tid = track['track']['id']
+            if track['is_local']:
+                continue
+            clean_tracks[tid] = track
+        except:
+            print('song ID not present')
+    return clean_tracks
