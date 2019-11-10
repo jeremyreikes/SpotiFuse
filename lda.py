@@ -1,6 +1,6 @@
 from pymongo import MongoClient
 client = MongoClient(readPreference='secondary')
-all_artists = client.spotify_db.all_artists
+artists_db = client.spotify_db.artists_db
 from pandas.io.json import json_normalize
 import warnings
 warnings.filterwarnings('ignore')
@@ -21,7 +21,7 @@ subgenre_model = LdaModel.load('lda_models/subgenre.model')
 
 
 def get_all_genres():
-    datapoints = list(all_artists.find({}, {'genres': 1}))
+    datapoints = list(artists_db.find({}, {'genres': 1}))
     df = json_normalize(datapoints)
     df.set_index('_id', inplace=True)
     df = df[df['genres'].map(lambda x: type(x) != float)]
@@ -77,7 +77,3 @@ def get_genre_preds(list_of_genres):
 
 def plot_topics(model, corpus, id2word):
     return pyLDAvis.gensim.prepare(model, corpus, id2word)
-
-
-#
-def add_genre_preds(all_genre_preds, subgenre_preds):
