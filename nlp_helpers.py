@@ -1,19 +1,23 @@
 import spacy
-nlp = spacy.load('en_core_web_lg')
+nlp = spacy.load('en_core_web_sm')
 from pymongo import MongoClient
 client = MongoClient(readPreference='secondary')
 db = client.spotify_db
-all_tracks = db.all_tracks
-parsed_playlists = db.parsed_playlists
-all_artists = db.all_artists
+tracks_db = db.tracks_db
+playlists_db = db.playlists_db
+artists_db = db.artists_db
 
 
-def lemmatize(doc):
+def lemmatize(text, return_lang=False):
+    doc = nlp(text)
     lemmas = list()
     for token in doc:
         if token.is_stop or not token.is_alpha:
             continue
         lemma = token.lemma_.strip().lower()
-        if lemma and lemma != '-PRON-':
+        if lemma:
             lemmas.append(lemma)
-    return set(lemmas)
+    lemmas = list(set(lemmas))
+    if return_lang:
+        return lemmas, doc.lang_
+    return lemmas
