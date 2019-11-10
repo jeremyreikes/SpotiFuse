@@ -1,6 +1,0 @@
-
-genius_client_access_token = '12aw40GNk62EJguj3_6Ilz18NLtme84g-2CREuXpQEktLKTf4L9AUqDnTgCeHKB9'
-spotify_client_id = '94fdc1a3412a42c5a92897fa57ca94b0'
-spotify_client_secret = 'a099661e06a641f3872c61c94a13a2d5'
-spotify_client_id_2 = '057136ce766c4b08afb637e0d75694b6'
-spotify_client_secret_2  = '6c534e0112a1412ca3a0527645f86c26'
