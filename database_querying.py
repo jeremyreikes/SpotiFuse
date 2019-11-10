@@ -1,63 +1,190 @@
+import pandas as pd
+import numpy as np
+import warnings
+warnings.filterwarnings('ignore')
+from tqdm import tqdm
+tqdm.pandas()
+from collections import Counter, defaultdict
+
 from pymongo import MongoClient
 client = MongoClient(readPreference='secondary')
-db = client.spotify_db
-all_tracks = db.all_tracks
-parsed_playlists = db.parsed_playlists
-all_artists = db.all_artists
-from collections import Counter
-import numpy as np
-parsed_playlists.find_one()
+spotify_db = client.spotify_db
+tracks_db = spotify_db.all_tracks
+playlists_db = spotify_db.parsed_playlists
+artists_db = spotify_db.parsed_playlists
 
-''' PLAYLIST FUNCTIONS '''
-
-def playlist_exists(pid):
-    return parsed_playlists.count_documents({'_id': pid}, limit = 1) == 1
-
-def get_playlist(pid):
-    return parsed_playlists.find_one({'_id': pid})
-
-def get_playlist_lemmas(pid):
-    return parsed_playlists.find_one({'_id': pid}, {'name_lemmas': 1})
-
-''' TRACK FUNCTIONS '''
-
-def track_exists(tid):
-    return all_tracks.count_documents({'_id': tid}, limit = 1) == 1
+''' TRACK METHODS '''
 
 def get_track(tid):
     return all_tracks.find_one({'_id': tid})
 
+def get_track_playlists(tid):
+    track = get_track(tid)
+    return track['playlists']
 
-''' ARTIST FUNCTIONS '''
+def get_audio_features(tid):
+    track = get_track(tid)
+    return track['audio_features']
 
-def artist_exists(aid):
-    return all_artists.count_documents({'_id': aid}, limit = 1) == 1
+def get_genres(tid):
+    track = get_track(tid)
+    return track['genres']
 
-def get_artist(aid):
-    return all_artists.find_one({'_id': aid})
-# all_tracks.find_one()
+def get_tweets(tid):
+    track = get_track(tid)
+    return track['tweets']
 
-# 705310 tracks
+def get_tracks(tids):
+    tracks = []
+    for tid in tids:
+        track = get_track(tid)
+        if track:
+            tracks.append(track)
+    return tracks
 
+def get_playlist_word_frequencies(tid, target_word=None):
+    word_counts = Counter()
+    playlist_ids = get_track_playlists(tid)
+    total_occurences = len(playlist_ids)
+    for playlist_id in playlist_ids:
+        lemmas = get_playlist_lemmas(playlist_id)
+        for lemma in lemmas:
+            word_counts[lemma] += 1
+    for word in word_counts:
+        word_counts[word] /= total_occurences
+    if target_word:
+        return word_counts.get(target_word, 0)
+    return word_counts
 
-# frequencies = get_frequencies_for_word('girls')
-# # vals = frequencies.values()
-# df = pd.DataFrame(frequencies.values())
-# df.hist()
+# def get_frequencies_for_word(word, tid_subset=None):
+#     all_tids = list()
+#     playlist_occurences = Counter()
+#     playlists = parsed_playlists.find({'lemmas': word})
 #
-# plt.hist(new)
-# df = df.apply(np.log)
-# df.hist()
-from sklearn.preprocessing import StandardScaler
-from scipy.stats import boxcox
+#     total_word_playlists = len(playlists)
+#     for playlist in playlists:
+#         tids = playlist['tids']
+#         for tid in tids:
+#             playlist_occurences[tid] += 1
+#         all_tids.extend(tids)
+#     all_tids = set(all_tids)
+#     if tid_subset:
+#         all_tids = all_tids.intersection(set(tid_subset))
+#     else:
+#         all_tids = list(all_tids)
 #
-# scaler = StandardScaler()
-# df = scaler.fit_transform(df)
-# plt.hist(df)
-# df.columns = ['values']
-# %matplotlib inline
-# import pandas as pd
-# px.histogram(df)
-# import plotly.express as px
-# frequencies.most_common()[-20:]
-# d
+#     all_playlist_frequencies = dict()
+#     word_playlist_frequencies = dict()
+#     for track in all_tracks.find({'_id': {'$in': all_tids}}, {'_id': 1, 'playlists': 1}):
+#         tid = track['_id']
+#
+#         all_playlist_frequencies[tid] = playlist_occurences[tid] / total_word_playlists
+#
+#         total_track_playlists = len(track['playlists'])
+#         if tid_subset or length >= 10: # arbitrary length to filter out rare songs that may have high frequencies
+#             word_playlist_frequencies[tid] = playlist_occurences[tid] / total_track_playlists # tid equals % of playlists song is in that have word in them - THIS IS #2
+#         else:
+#             del playlist_occurences[track['_id']]
+#     if playlist_occurences.get(None, False):
+#         del playlist_occurences[None]
+#     return playlist_occurences
+
+
+# word_playlist_frequencies -  What % of all given 'word' playlists is the song in?
+# all_playlist_frequencies - What % of time that a song is in any playlist is in it the given 'word' playlist?
+def get_frequencies_for_word(word):
+    all_tids = list()
+    playlist_occurences = Counter()
+    playlists = parsed_playlists.find({'lemmas': word})
+    for playlist in playlists:
+        tids = set(playlist['tids'])
+        for tid in tids:
+            playlist_occurences[tid] += 1
+        all_tids.extend(tids)
+    all_tids = list(set(all_tids))
+
+    total_word_playlists = playlists.count()
+    all_playlist_frequencies = dict()
+    word_playlist_frequencies = dict()
+    track_occurences = dict()
+
+    for track in all_tracks.find({'_id': {'$in': all_tids}}, {'_id': 1, 'playlists': 1}):
+        tid = track['_id']
+        total_track_playlists = len(track['playlists'])
+
+        if total_track_playlists > 10:
+            all_playlist_frequencies[tid] = playlist_occurences[tid] / total_track_playlists
+        word_playlist_frequencies[tid] = playlist_occurences[tid] / total_word_playlists
+
+    return word_playlist_frequencies, all_playlist_frequencies
+
+def get_top_n_tids(num_tracks):
+    top_counts = Counter()
+    for track in all_tracks.find():
+        top_counts[track['_id']] = len(track['playlists'])
+    return [x[0] for x in top_counts.most_common(num_tracks)]
+
+def get_total_track_occurences():
+    total_occurences = dict()
+    for track in all_tracks.find():
+        total_occurences[track['_id']] = len(track['playlists'])
+    return total_occurences
+
+# def get_artist_tracks(artist_name = None, artist_id = None):
+#     if artist_id:
+#         return all_tracks.find({'artist_id': artist_id})
+#     elif artist_name:
+#         return all_tracks.find({'artist_name': artist_name})
+#     else:
+#         return None
+
+def get_track_from_name(name):
+    return all_tracks.find_one({'name': name})
+
+'''  PLAYLIST METHODS '''
+
+def get_playlist(pid):
+    return parsed_playlists.find_one({'_id': pid})
+
+def playlist_exists(pid):
+    playlists_db.count_documents({'_id': pid})
+    return parsed_playlists.find_one({'_id': pid})
+
+def get_playlist_lemmas(pid):
+    playlist = get_playlist(pid)
+    try:
+        return playlist['lemmas']
+    except:
+        return list()
+
+def get_playlist_description(pid):
+    playlist = get_playlist(pid)
+    try:
+        return playlist['description']
+    except:
+        return ''
+
+def get_playlist_name(pid):
+    playlist = get_playlist(pid)
+    try:
+        return playlist['name']
+    except:
+        return ''
+
+def get_playlist_user_id(pid):
+    playlist = get_playlist(pid)
+    try:
+        return playlist['user_id']
+    except:
+        return ''
+
+def get_playlist_tids(pid):
+    playlist = get_playlist(pid)
+    try:
+        return playlist['tids']
+    except:
+        return list()
+
+def get_playlist_tracks(pid):
+    tids = get_playlist_tids(pid)
+    return all_tracks.find({'_id': {'$in': tids}})
