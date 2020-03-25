@@ -21,7 +21,7 @@ import numpy as np
 # db = client.spotify_db
 # tracks_db = db.tracks_db
 # playlists_db = db.playlists_db
-
+#
 class User:
     def __init__(self, playlist_id):
         self.tids = self.fetch_playlist_tids(playlist_id)

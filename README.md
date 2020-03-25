@@ -1,7 +1,5 @@
 # SpotiFuse
 
-After upgrading my Mac OS to Catalina, MongoDB is refusing to connect.
+There are currently some issues with my Dash app after upgrading to Mac's Catalina OS.  
 
-I'm currently reworking my code and will push the corresponding fix on 11/10/19.
-
-Stay tuned.
+I am currently reworking some code and will push the corresponding fix soon in the coming weeks.
